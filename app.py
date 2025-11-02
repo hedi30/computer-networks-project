@@ -45,6 +45,16 @@ if 'waiting_for_result' not in st.session_state:
     st.session_state.waiting_for_result = False
 if 'show_answer_form' not in st.session_state:
     st.session_state.show_answer_form = False
+if 'round_leaderboard' not in st.session_state:
+    st.session_state.round_leaderboard = []
+if 'round_number' not in st.session_state:
+    st.session_state.round_number = 0
+if 'total_rounds' not in st.session_state:
+    st.session_state.total_rounds = 0
+if 'is_host' not in st.session_state:
+    st.session_state.is_host = False
+if 'lobby_poll_tick' not in st.session_state:
+    st.session_state.lobby_poll_tick = 0
 
 def send_message(message_type, data):
     """Send a message to the server"""
@@ -132,6 +142,7 @@ def process_messages():
             if msg_type == 'registered':
                 st.session_state.registered = True
                 st.session_state.player_count = msg_data.get('player_count', 0)
+                st.session_state.is_host = msg_data.get('is_host', False)
                 should_rerun = True
             
             elif msg_type == 'player_joined':
@@ -148,12 +159,17 @@ def process_messages():
                 msg_data['answered'] = False
                 msg_data['answer_feedback'] = None  # Clear any old feedback
                 st.session_state.current_question = msg_data
+                # Ensure UI switches to active game even if 'game_start' was missed
+                st.session_state.game_active = True
                 st.session_state.question_start_time = time.time()
                 # Reset any waiting counters when a fresh question arrives
                 st.session_state.rerun_counter = 0
                 st.session_state.timer_tick = 0
                 st.session_state.waiting_for_result = False
                 st.session_state.show_answer_form = True
+                # Clear any previous round leaderboard on new question
+                st.session_state.round_leaderboard = []
+                st.session_state.round_number = msg_data.get('question_number', 0) - 1 if msg_data.get('question_number') else 0
                 print(f"[DEBUG] New question received: Q{msg_data.get('question_number')}")
                 should_rerun = True
             
@@ -184,12 +200,28 @@ def process_messages():
                 st.session_state.show_answer_form = False
                 should_rerun = True
             
+            elif msg_type == 'leaderboard':
+                # Mid-game leaderboard update after a round
+                st.session_state.round_leaderboard = msg_data.get('leaderboard', [])
+                st.session_state.round_number = msg_data.get('round', st.session_state.round_number)
+                st.session_state.total_rounds = msg_data.get('total_rounds', st.session_state.total_rounds)
+                should_rerun = True
+            
+            elif msg_type == 'host_update':
+                # Update host info (compare by name)
+                host_name = msg_data.get('host_name')
+                if host_name is not None:
+                    st.session_state.is_host = (host_name == st.session_state.player_name)
+                should_rerun = True
+            
             elif msg_type == 'game_end':
                 st.session_state.game_active = False
                 st.session_state.current_question = None
                 st.session_state.leaderboard = msg_data.get('leaderboard', [])
                 st.session_state.waiting_for_result = False
                 st.session_state.show_answer_form = False
+                st.session_state.round_leaderboard = []
+                st.session_state.round_number = 0
                 should_rerun = True
             
             elif msg_type == 'error':
@@ -199,6 +231,8 @@ def process_messages():
                 st.session_state.connected = False
                 st.session_state.registered = False
                 st.error(f"❌ {msg_data.get('message')}")
+                st.session_state.round_leaderboard = []
+                st.session_state.round_number = 0
                 should_rerun = True
             
             elif msg_type == 'status':
@@ -317,6 +351,32 @@ def render_leaderboard():
         send_message('start_game', {})
         st.session_state.leaderboard = []
         st.rerun()
+
+def render_round_leaderboard():
+    """Render the mid-game leaderboard after each round"""
+    rn = st.session_state.round_number
+    tr = st.session_state.total_rounds
+    st.header(f"🏁 Round {rn}{f'/{tr}' if tr else ''} Leaderboard")
+    st.markdown("---")
+    if not st.session_state.round_leaderboard:
+        st.info("Leaderboard will appear here after each round.")
+        return
+    for i, entry in enumerate(st.session_state.round_leaderboard, 1):
+        medal = ""
+        if i == 1:
+            medal = "🥇"
+        elif i == 2:
+            medal = "🥈"
+        elif i == 3:
+            medal = "🥉"
+        is_you = entry['name'] == st.session_state.player_name
+        style = "border: 2px solid var(--accent); padding: 12px; border-radius: 10px; background-color: rgba(255,255,255,0.06);"
+        normal_style = "padding: 8px; border-radius: 8px;"
+        st.markdown(f"""
+        <div class="leaderboard-card hot-card" style="{style if is_you else normal_style}">
+            <h4>{medal} {i}. {entry['name']}: {entry['score']} points</h4>
+        </div>
+        """, unsafe_allow_html=True)
 
 # Main UI
 st.set_page_config(page_title="TCP Quiz Game", page_icon="🎮", layout="wide")
@@ -437,9 +497,17 @@ else:
     # Game Status
     if not st.session_state.registered:
         st.info("Registering with server...")
+        # Silent polling while waiting to register
+        if st.session_state.lobby_poll_tick < 400:
+            st.session_state.lobby_poll_tick += 1
+            time.sleep(0.3)
+            st.rerun()
+        else:
+            st.session_state.lobby_poll_tick = 0
     
     elif st.session_state.leaderboard:
         # Show final leaderboard regardless of game_active
+        st.session_state.lobby_poll_tick = 0  # reset lobby polling when not in lobby
         render_leaderboard()
     
     elif not st.session_state.game_active:
@@ -448,17 +516,28 @@ else:
         
         if st.session_state.player_count > 0:
             st.info(f"Waiting in lobby... {st.session_state.player_count} player(s) connected")
-            
-            if st.button("🚀 Start Game", type="primary"):
-                send_message('start_game', {})
-                st.info("Starting game...")
-                time.sleep(0.5)
-                st.rerun()
+            if st.session_state.is_host:
+                if st.button("🚀 Start Game", type="primary"):
+                    send_message('start_game', {})
+                    st.info("Starting game...")
+                    time.sleep(0.5)
+                    st.rerun()
+            else:
+                st.caption("Only the host can start the game.")
         else:
             st.warning("No players connected")
+
+        # Silent polling in lobby to process incoming messages (e.g., game_start, question)
+        if st.session_state.lobby_poll_tick < 400:  # ~120s at 0.3s
+            st.session_state.lobby_poll_tick += 1
+            time.sleep(0.3)
+            st.rerun()
+        else:
+            st.session_state.lobby_poll_tick = 0
     
     else:
         # Active Game
+        st.session_state.lobby_poll_tick = 0  # reset lobby polling when in game
         if st.session_state.current_question:
             # Show current question with quiz app styling
             question = st.session_state.current_question
@@ -586,7 +665,10 @@ else:
             render_leaderboard()
         
         else:
-            # Waiting between questions or after answering (no waiting UI)
+            # Waiting between questions: show round leaderboard if available and silently poll for next question
+            if st.session_state.round_leaderboard:
+                render_round_leaderboard()
+                st.markdown("---")
             # Auto-refresh while waiting for the server to push the next question
             if st.session_state.game_active:
                 if st.session_state.rerun_counter < 120:  # ~36s total at 0.3s per tick
@@ -596,8 +678,4 @@ else:
                 else:
                     # Safety reset in case we somehow miss the next question
                     st.session_state.rerun_counter = 0
-
-# Footer
-st.markdown("---")
-st.caption("**TCP Protocol Demo** - Connection-oriented, reliable, ordered delivery")
 

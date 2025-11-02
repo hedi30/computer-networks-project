@@ -16,7 +16,7 @@ import random
 HOST = '0.0.0.0'  # Listen on all interfaces
 PORT = 8889
 BUFFER_SIZE = 4096
-QUESTION_TIME_LIMIT = 30  # seconds per question
+QUESTION_TIME_LIMIT = 10  # seconds per question (reduced from 30)
 
 class TCPQuizServer:
     def __init__(self):
@@ -36,6 +36,7 @@ class TCPQuizServer:
         self.current_question_index = 0
         self.question_start_time = None
         self.game_lock = threading.Lock()
+        self.host_conn_id = None  # connection id of the host (first client)
         
         print(f"TCP Quiz Server started on {HOST}:{PORT}")
         print(f"Loaded {len(self.questions)} questions")
@@ -115,6 +116,18 @@ class TCPQuizServer:
             except:
                 pass
             del self.clients[conn_id]
+            # Reassign host if needed
+            if self.host_conn_id == conn_id:
+                if self.clients:
+                    new_host_id = sorted(self.clients.keys())[0]
+                    self.host_conn_id = new_host_id
+                    new_host = self.clients[new_host_id]
+                    # Notify all clients about new host
+                    self.broadcast_message('host_update', {
+                        'host_name': new_host.get('name')
+                    })
+                else:
+                    self.host_conn_id = None
     
     def handle_client_register(self, conn_id, conn, data):
         """Handle client registration"""
@@ -132,7 +145,8 @@ class TCPQuizServer:
             print(f"Player {player_name} ({self.clients[conn_id]['addr']}) registered")
             self.send_message(conn, 'registered', {
                 'message': f'Welcome {player_name}!',
-                'player_count': len(self.clients)
+                'player_count': len(self.clients),
+                'is_host': (conn_id == self.host_conn_id)
             })
             
             # Notify other clients
@@ -244,6 +258,16 @@ class TCPQuizServer:
                         'correct_answer': question['answer'],
                         'question_number': i + 1
                     })
+                    # After each question, send a mid-game leaderboard update
+                    leaderboard = []
+                    for _cid, _client in self.clients.items():
+                        leaderboard.append({'name': _client['name'], 'score': _client['score']})
+                    leaderboard.sort(key=lambda x: x['score'], reverse=True)
+                    self.broadcast_message('leaderboard', {
+                        'leaderboard': leaderboard,
+                        'round': i + 1,
+                        'total_rounds': len(self.questions)
+                    })
             
             # Brief pause between questions
             if i < len(self.questions) - 1:
@@ -283,6 +307,10 @@ class TCPQuizServer:
     def handle_request_start_game(self, conn_id, conn):
         """Handle request to start game"""
         with self.game_lock:
+            # Only host can start the game
+            if self.host_conn_id is None or conn_id != self.host_conn_id:
+                self.send_message(conn, 'error', {'message': 'Only the host can start the game'})
+                return
             if conn_id not in self.clients:
                 self.send_message(conn, 'error', {'message': 'Not registered'})
                 return
@@ -309,6 +337,9 @@ class TCPQuizServer:
                 'answers': [],
                 'answer_times': []
             }
+            # Assign host to the first connected client
+            if self.host_conn_id is None:
+                self.host_conn_id = conn_id
         
         try:
             buffer = ""
