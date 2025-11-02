@@ -1,0 +1,105 @@
+What is the default port number for HTTP?
+A) 80
+B) 443
+C) 21
+D) 25
+ANSWER:A
+
+Which protocol is connection-oriented?
+A) UDP
+B) TCP
+C) ICMP
+D) ARP
+ANSWER:B
+
+What does DNS stand for?
+A) Domain Name System
+B) Dynamic Network Service
+C) Data Network Security
+D) Digital Network System
+ANSWER:A
+
+Which layer of the OSI model does IP operate at?
+A) Layer 2
+B) Layer 3
+C) Layer 4
+D) Layer 5
+ANSWER:B
+
+What is the maximum length of an IPv4 address?
+A) 16 bits
+B) 32 bits
+C) 64 bits
+D) 128 bits
+ANSWER:B
+
+Which protocol is used for secure web communication?
+A) HTTP
+B) FTP
+C) HTTPS
+D) SMTP
+ANSWER:C
+
+What does UDP stand for?
+A) User Data Protocol
+B) Universal Data Protocol
+C) User Datagram Protocol
+D) Universal Datagram Protocol
+ANSWER:C
+
+What is the default port number for HTTPS?
+A) 80
+B) 443
+C) 8080
+D) 8443
+ANSWER:B
+
+Which networking device operates at Layer 2 of the OSI model?
+A) Router
+B) Switch
+C) Hub
+D) Gateway
+ANSWER:B
+
+What is a subnet mask used for?
+A) To identify the network portion of an IP address
+B) To encrypt data packets
+C) To route packets between networks
+D) To compress data
+ANSWER:A
+
+Which protocol is connectionless and unreliable?
+A) TCP
+B) UDP
+C) HTTP
+D) FTP
+ANSWER:B
+
+What does MAC address stand for?
+A) Media Access Control
+B) Machine Access Control
+C) Multiple Access Control
+D) Main Access Control
+ANSWER:A
+
+How many bits are in a MAC address?
+A) 32 bits
+B) 48 bits
+C) 64 bits
+D) 128 bits
+ANSWER:B
+
+What is the purpose of ARP?
+A) To resolve IP addresses to MAC addresses
+B) To route packets
+C) To encrypt data
+D) To compress data
+ANSWER:A
+
+Which port does SMTP use?
+A) 21
+B) 25
+C) 80
+D) 443
+ANSWER:B
+
