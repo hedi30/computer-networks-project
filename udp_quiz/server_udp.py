@@ -18,11 +18,6 @@ HOST = '0.0.0.0'  # Listen on all interfaces
 PORT = 8888
 BUFFER_SIZE = 4096
 QUESTION_TIME_LIMIT = 10  # seconds per question
-# Demo impairment knobs (can override via environment)
-LOSS_PCT = float(os.getenv('UDP_DEMO_LOSS', '0.0'))        # e.g., 0.15 for 15% drop
-DUP_PCT = float(os.getenv('UDP_DEMO_DUP', '0.0'))          # e.g., 0.05 for 5% duplicate
-REORDER_PCT = float(os.getenv('UDP_DEMO_REORDER', '0.0'))  # e.g., 0.08 for 8% reorder
-REORDER_DELAY = float(os.getenv('UDP_DEMO_REORDER_DELAY', '0.5'))  # seconds
 REBROADCAST_INTERVAL = float(os.getenv('UDP_REBROADCAST_EVERY', '2.0'))  # seconds
 # Heartbeat to illustrate connectionless nature (no state, periodic broadcast)
 HEARTBEAT_INTERVAL = float(os.getenv('UDP_HEARTBEAT_EVERY', '2.0'))
@@ -95,26 +90,8 @@ class UDPQuizServer:
         self.seq += 1
         return self.seq
 
-    def _maybe_send_one(self, address, payload_bytes):
-        """Simulate UDP impairments: loss, reordering, duplication."""
-        # Loss
-        if random.random() < LOSS_PCT:
-            print(f"[SIM LOSS] drop -> {address}")
-            return
-        # Reorder (delay)
-        if random.random() < REORDER_PCT:
-            delay = REORDER_DELAY
-            print(f"[SIM REORDER] delay={delay:.2f}s -> {address}")
-            threading.Timer(delay, lambda: self.sock.sendto(payload_bytes, address)).start()
-        else:
-            self.sock.sendto(payload_bytes, address)
-        # Duplicate (send extra copy immediately)
-        if random.random() < DUP_PCT:
-            print(f"[SIM DUP] duplicate -> {address}")
-            self.sock.sendto(payload_bytes, address)
-
     def send_message(self, address, message_type, data):
-        """Send a message to a client (with seq + impairment simulation)"""
+        """Send a message to a client with sequence number"""
         message = {
             'type': message_type,
             'data': data,
@@ -123,7 +100,7 @@ class UDPQuizServer:
         }
         try:
             payload = json.dumps(message).encode('utf-8')
-            self._maybe_send_one(address, payload)
+            self.sock.sendto(payload, address)
         except Exception as e:
             print(f"Error sending to {address}: {e}")
     
