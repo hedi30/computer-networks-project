@@ -11,30 +11,45 @@ import time
 from collections import defaultdict
 from datetime import datetime
 import random
+import os
 
 # Server configuration
 HOST = '0.0.0.0'  # Listen on all interfaces
 PORT = 8888
 BUFFER_SIZE = 4096
-QUESTION_TIME_LIMIT = 30  # seconds per question
+QUESTION_TIME_LIMIT = 10  # seconds per question
+# Demo impairment knobs (can override via environment)
+LOSS_PCT = float(os.getenv('UDP_DEMO_LOSS', '0.0'))        # e.g., 0.15 for 15% drop
+DUP_PCT = float(os.getenv('UDP_DEMO_DUP', '0.0'))          # e.g., 0.05 for 5% duplicate
+REORDER_PCT = float(os.getenv('UDP_DEMO_REORDER', '0.0'))  # e.g., 0.08 for 8% reorder
+REORDER_DELAY = float(os.getenv('UDP_DEMO_REORDER_DELAY', '0.5'))  # seconds
+REBROADCAST_INTERVAL = float(os.getenv('UDP_REBROADCAST_EVERY', '2.0'))  # seconds
+# Heartbeat to illustrate connectionless nature (no state, periodic broadcast)
+HEARTBEAT_INTERVAL = float(os.getenv('UDP_HEARTBEAT_EVERY', '2.0'))
 
 class UDPQuizServer:
     def __init__(self):
+        """Initialize UDP quiz server state and underlying socket."""
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((HOST, PORT))
-        self.sock.settimeout(1.0)  # For graceful shutdown
-        
-        # Load questions
+        self.sock.settimeout(1.0)  # For graceful shutdown polling
+
+        # Load and shuffle questions
         self.questions = self.load_questions()
         random.shuffle(self.questions)
-        
-        # Client management (address -> player data)
-        self.clients = {}  # {address: {'name': str, 'score': int, 'start_time': float}}
+
+        # Core game / client state
+        self.clients = {}  # {address: {'name': str, 'score': int, 'answers': [], 'answer_times': []}}
         self.active_game = False
         self.current_question_index = 0
         self.question_start_time = None
         self.game_lock = threading.Lock()
-        
+
+        # Sequencing + rebroadcast support (UDP demo features)
+        self.seq = 0  # monotonically increasing sequence number
+        self._last_rebroadcast = 0.0  # seconds since question start at last rebroadcast
+        self._last_heartbeat = 0.0
+
         print(f"UDP Quiz Server started on {HOST}:{PORT}")
         print(f"Loaded {len(self.questions)} questions")
     
@@ -76,15 +91,39 @@ class UDPQuizServer:
         
         return questions
     
+    def _next_seq(self):
+        self.seq += 1
+        return self.seq
+
+    def _maybe_send_one(self, address, payload_bytes):
+        """Simulate UDP impairments: loss, reordering, duplication."""
+        # Loss
+        if random.random() < LOSS_PCT:
+            print(f"[SIM LOSS] drop -> {address}")
+            return
+        # Reorder (delay)
+        if random.random() < REORDER_PCT:
+            delay = REORDER_DELAY
+            print(f"[SIM REORDER] delay={delay:.2f}s -> {address}")
+            threading.Timer(delay, lambda: self.sock.sendto(payload_bytes, address)).start()
+        else:
+            self.sock.sendto(payload_bytes, address)
+        # Duplicate (send extra copy immediately)
+        if random.random() < DUP_PCT:
+            print(f"[SIM DUP] duplicate -> {address}")
+            self.sock.sendto(payload_bytes, address)
+
     def send_message(self, address, message_type, data):
-        """Send a message to a client"""
+        """Send a message to a client (with seq + impairment simulation)"""
         message = {
             'type': message_type,
             'data': data,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'seq': self._next_seq()
         }
         try:
-            self.sock.sendto(json.dumps(message).encode('utf-8'), address)
+            payload = json.dumps(message).encode('utf-8')
+            self._maybe_send_one(address, payload)
         except Exception as e:
             print(f"Error sending to {address}: {e}")
     
@@ -201,8 +240,19 @@ class UDPQuizServer:
             }
             self.broadcast_message('question', question_data)
             
-            # Wait for time limit
-            time.sleep(QUESTION_TIME_LIMIT)
+            # Active question window with periodic rebroadcast to mitigate loss/late joins
+            start = time.time()
+            self._last_rebroadcast = 0.0
+            while True:
+                elapsed = time.time() - start
+                if elapsed >= QUESTION_TIME_LIMIT:
+                    break
+                # Periodic rebroadcast
+                if elapsed - self._last_rebroadcast >= REBROADCAST_INTERVAL:
+                    print(f"[REBROADCAST] question {i+1}")
+                    self.broadcast_message('question', question_data)
+                    self._last_rebroadcast = elapsed
+                time.sleep(0.2)
             
             # Send correct answer if game still active
             with self.game_lock:
@@ -268,6 +318,11 @@ class UDPQuizServer:
         
         try:
             while True:
+                # Periodic heartbeat broadcast (even if no incoming data)
+                now = time.time()
+                if now - self._last_heartbeat >= HEARTBEAT_INTERVAL and self.clients:
+                    self.broadcast_message('heartbeat', {'note': 'server heartbeat'})
+                    self._last_heartbeat = now
                 try:
                     data, address = self.sock.recvfrom(BUFFER_SIZE)
                     

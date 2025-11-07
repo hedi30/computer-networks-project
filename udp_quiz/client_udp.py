@@ -24,6 +24,11 @@ class UDPQuizClient:
         self.current_question = None
         self.question_start_time = None
         self.running = True
+        # For UDP demo: track last processed sequence number
+        self.last_seq = 0
+        # Link monitoring (to illustrate UDP has no connection state)
+        self.last_packet_time = time.time()
+        self._link_warned = False
         
     def send_message(self, message_type, data):
         """Send a message to the server"""
@@ -47,6 +52,17 @@ class UDPQuizClient:
                 
                 try:
                     message = json.loads(data.decode('utf-8'))
+                    # Any packet received resets link timer
+                    self.last_packet_time = time.time()
+                    # Sequence-based duplicate/gap handling (UDP demo)
+                    seq = message.get('seq', 0)
+                    if seq:
+                        if seq <= self.last_seq:
+                            print(f"[CLIENT] Duplicate/old packet seq={seq} (last={self.last_seq}) -> ignored")
+                            continue
+                        if seq > self.last_seq + 1:
+                            print(f"[CLIENT] GAP detected: expected seq {self.last_seq+1}, got {seq}")
+                        self.last_seq = seq
                     self.handle_message(message)
                 except json.JSONDecodeError:
                     print("Received invalid JSON message")
@@ -78,6 +94,14 @@ class UDPQuizClient:
             print(f"{'='*50}\n")
         
         elif msg_type == 'question':
+            # Ignore stale/reordered questions (by question_number)
+            incoming_q = msg_data.get('question_number', 0)
+            current_q = self.current_question.get('question_number', 0) if self.current_question else 0
+            if incoming_q and current_q and incoming_q < current_q:
+                print(f"[CLIENT] Stale question frame (#{incoming_q}) < current (#{current_q}) -> ignored")
+                return
+            if incoming_q and current_q and incoming_q == current_q:
+                print(f"[CLIENT] Rebroadcast question #{incoming_q}")
             self.current_question = msg_data
             self.question_start_time = time.time()
             
@@ -141,6 +165,10 @@ class UDPQuizClient:
         elif msg_type == 'status':
             print(f"\nStatus: Active game={msg_data.get('active_game')}, "
                   f"Players={msg_data.get('player_count')}\n")
+        
+        elif msg_type == 'heartbeat':
+            # Keep output minimal but visible in demo
+            print("♥ heartbeat")
     
     def submit_answer(self, answer):
         """Submit an answer to the current question"""
@@ -157,7 +185,24 @@ class UDPQuizClient:
                 return
         
         self.send_message('answer', {'answer': answer.upper().strip()})
+        print("(UDP) Answer sent — no delivery guarantee; result will appear only if the server receives it.")
         self.current_question = None  # Clear to prevent double answering
+
+    def _link_monitor(self):
+        """Print warnings when no packets are received for a while to illustrate UDP's lack of connection state."""
+        WARN_AFTER = 5.0  # seconds without any packet
+        RESTORED_AFTER = 2.0
+        while self.running:
+            now = time.time()
+            delta = now - self.last_packet_time
+            if delta >= WARN_AFTER and not self._link_warned:
+                print("\n[LINK?] No packets from server for", f"{delta:.1f}s",
+                      "— UDP won't tell you you're disconnected. Waiting for traffic to resume...\n")
+                self._link_warned = True
+            if self._link_warned and delta < RESTORED_AFTER:
+                print("\n[LINK] Server contact restored (packets received).\n")
+                self._link_warned = False
+            time.sleep(0.5)
     
     def start(self):
         """Start the client"""
@@ -169,6 +214,8 @@ class UDPQuizClient:
         # Start receiver thread
         receiver_thread = threading.Thread(target=self.receive_messages, daemon=True)
         receiver_thread.start()
+        # Start link monitor thread
+        threading.Thread(target=self._link_monitor, daemon=True).start()
         
         # Wait for registration
         time.sleep(0.5)
